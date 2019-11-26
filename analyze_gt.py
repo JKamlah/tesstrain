@@ -22,8 +22,8 @@ arg_parser.add_argument("-c", "--categorize", help="Customized unicodedata categ
 args = arg_parser.parse_args()
 
 
-def get_defaultdict(infodictstage, newstage):
-    infodictstage[newstage] = defaultdict(dict) if not infodictstage.get(newstage, None) else infodictstage[newstage]
+def get_defaultdict(infodictstage, newstage, instance=dict):
+    infodictstage[newstage] = defaultdict(instance) if not infodictstage.get(newstage, None) else infodictstage[newstage]
 
 
 def load_catdata():
@@ -36,12 +36,12 @@ def load_catdata():
             if len(line) < 1 or line[0] == "#": continue
             if line[0]+line[-1] == "[]":
                 cat = line.strip("[]")
-                get_defaultdict(catdata,cat)
+                get_defaultdict(catdata,cat, instance=list)
                 continue
             if cat:
                 if "=" in line:
                     subcat, line = re.sub('\s', '', line).split('=')
-                    catdata[cat][subcat] = []
+                    #catdata[cat][subcat] = []
                 if subcat and isinstance(catdata[cat][subcat],list):
                     for values in line.split(','):
                         if '-' in values and len(values.split('-')) == 2:
@@ -51,6 +51,8 @@ def load_catdata():
                                 catdata[cat][subcat].append(int(values))
                             elif values[:2] == "0x":
                                 catdata[cat][subcat].append(int(values,16))
+                            elif len(values) > 1:
+                                catdata[cat][subcat].append(values)
                             else:
                                 catdata[cat][subcat].append(ord(values))
         if cat and subcat:
@@ -72,10 +74,11 @@ def categorize(infodict:defaultdict,category="unicode"):
         if catdata and category in catdata.keys():
             for key, val in infodict['overall']['character'].items():
                 for subcat, subdata in catdata[category].items():
-                    if ord(key) in subdata:
-                        get_defaultdict(infodict,category)
-                        get_defaultdict(infodict[category],subcat)
-                        infodict[category][subcat][key] = val
+                    for subdat in subdata:
+                        if ord(key) == subdat or subdat in unicodedata.name(key).replace(" ",""):
+                            get_defaultdict(infodict,category)
+                            get_defaultdict(infodict[category],subcat)
+                            infodict[category][subcat][key] = val
     return
 
 # Set filenames or Path
