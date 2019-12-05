@@ -2,17 +2,18 @@
 
 import argparse
 import io
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, OrderedDict
 from pathlib import Path
 from functools import reduce
-from pprint import pprint
 import unicodedata
 import re
-from PIL import Image
+import sys
 
 # Command line arguments.
 arg_parser = argparse.ArgumentParser(description='Analyze the ground truth texts for the given text files.')
 arg_parser.add_argument("filename", type=lambda x: Path(x), help="filename of text file or path to files", nargs='*')
+arg_parser.add_argument("-o","--output", type=lambda x: Path(x) if x is not None else None, default=None,help="filename of the output report, \
+                        if none is given the result is printed to stdout")
 arg_parser.add_argument("-n", "--dry-run", help="show which files would be normalized but don't change them",
                         action="store_true")
 arg_parser.add_argument("-v", "--verbose", help="show ignored files", action="store_true")
@@ -28,7 +29,7 @@ arg_parser.add_argument("-t", "--textnormalization", help="Textnormalization set
 args = arg_parser.parse_args()
 
 
-def get_defaultdict(resultslvl, newlvl, instance=dict):
+def get_defaultdict(resultslvl, newlvl, instance=OrderedDict):
     resultslvl[newlvl] = defaultdict(instance) if not resultslvl.get(newlvl, None) else resultslvl[newlvl]
 
 
@@ -37,17 +38,18 @@ def load_settings(filename):
     setting, subsetting = None, None
     with open(Path(filename), 'r') as fin:
         for line in fin.readlines():
-            line = line.strip().strip(',')
+            line = line.strip()
             if len(line) < 1 or line[0] == '#': continue
             if line[0] + line[-1] == '[]':
                 setting = line.strip('[]')
                 get_defaultdict(settings, setting, instance=list)
                 continue
             if setting:
-                if '=' in line:
-                    subsetting, line = re.sub(r'\s', '', line).split('=')
+                if '==' in line:
+                    subsetting, line = line.split("==")
+                    line = re.sub(r' ', '', line)
                 if subsetting and isinstance(settings[setting][subsetting], list):
-                    for values in line.split(','):
+                    for values in line.split('||'):
                         if '-' in values and len(values.split('-')) == 2:
                             settings[setting][subsetting].append(range(
                                 *sorted([int(val) if not '0x' in val else int(val, 16) for val in values.split('-')])))
@@ -64,18 +66,18 @@ def load_settings(filename):
             return settings
 
 
-def categorize(results: defaultdict, category='unicode'):
-    if category == 'unicode':
-        for glyphe, count in results['overall']['character'].items():
+def categorize(results: defaultdict, category='overall'):
+    if category == 'overall':
+        for glyphe, count in results[category]['character'].items():
             uname = unicodedata.name(glyphe)
             ucat = unicodedata.category(glyphe)
             usubcat = uname.split(' ')[0]
-            get_defaultdict(results['overall'], ucat[0])
-            get_defaultdict(results['overall'][ucat[0]], usubcat)
-            get_defaultdict(results['overall'][ucat[0]][usubcat], ucat[1])
-            results['overall'][ucat[0]][usubcat][ucat[1]].update({glyphe: count})
+            get_defaultdict(results[category], ucat[0])
+            get_defaultdict(results[category][ucat[0]], usubcat)
+            get_defaultdict(results[category][ucat[0]][usubcat], ucat)
+            results[category][ucat[0]][usubcat][ucat].update({glyphe: count})
     else:
-        categories = load_settings("./analyse-settings/categories")
+        categories = load_settings("settings/analyse/categories")
         if categories and category in categories.keys():
             for glyphe, count in results['overall']['character'].items():
                 for subcat, subkeys in categories[category].items():
@@ -88,7 +90,7 @@ def categorize(results: defaultdict, category='unicode'):
 
 
 def validate_guidelines(fulltext, results, guideline):
-    guidelines = load_settings("./analyse-settings/guidelines")
+    guidelines = load_settings("settings/analyse/guidelines")
     delregex = []
     if guidelines and guideline in guidelines.keys():
         for conditionkey, conditions in guidelines[guideline].items():
@@ -100,6 +102,7 @@ def validate_guidelines(fulltext, results, guideline):
                     get_defaultdict(results[guideline], conditionkey)
                     results[guideline][conditionkey][condition] = len(count)
             delregex.append(conditionkey)
+        #tbd: replace with elegant implementation
         for conditionkey in delregex:
             del guidelines[guideline][conditionkey]
         for glyphe, count in results['overall']['character'].items():
@@ -113,23 +116,72 @@ def validate_guidelines(fulltext, results, guideline):
     return
 
 
-def create_report(result, format="stdin"):
-    report=f"""
-    Analyse-Report 
-    {pprint(result,str)}
-    
-    """
-    print(report)
+def report_subsection(fout, subsection, result, header="", subheaderinfo=""):
+    addline = '\n'
+    fout.write(f"""
+    {header}
+    {subheaderinfo}{addline if subheaderinfo != "" else ""}""")
+    for condition, conditionres in result[subsection].items():
+        fout.write(f"""
+        {condition}:""")
+        for key, val in conditionres.items():
+            if isinstance(val,dict):
+                fout.write(f"""
+                {key}:""")
+                for keyy, vall in sorted(val.items()):
+                    fout.write(f"""
+                     {keyy}: {vall}""")
+            else:
+                fout.write(f"""
+                {key}: {val}""")
+    fout.write(f"""
+    \n{"-"*60}\n""")
+    return
 
+
+def sum_statistics(result, section):
+    return sum([val for subsection in result[section].values() for val in subsection.values()])
+
+
+def create_report(result, output):
+    if not output:
+        fout = sys.stdout
+    else:
+        if not output.parent.exist():
+            output.parent.mkdir()
+        if not output.is_file():
+            output.join("result.txt")
+        fout = open(output,'w')
+    fout.write(f"""
+    Analyse-Report Version 0.1
+    Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
+    \n{"-"*60}\n""")
+    if args.guidelines in result.keys():
+        violations = sum_statistics(result,args.guidelines)
+        report_subsection(fout,args.guidelines,result, \
+                          header=f"{args.guidelines} Guidelines Evaluation", subheaderinfo=f"Guideline violations overall: {violations}")
+    for category in args.categorize:
+        if category in result.keys():
+            occurences = sum_statistics(result, category)
+            report_subsection(fout,category,result, \
+                              header=f"Category statistics: {category}", subheaderinfo=f"Overall occurrences: {occurences}")
+    if "overall" in result.keys():
+        report_subsection(fout, "L", result["overall"], header="Overall Letter statistics")
+        #pass
+        #create_subsection(fout, "overall",result, header="Overall statistics")
+    if "single" in result.keys():
+        pass
+        #create_subsection(fout,"single",result, header="Single statistics")
+    fout.close()
     return
 
 
 def main():
     # Set filenames or path
     if len(args.filename) == 1 and not args.filename[0].is_file():
-        args.filename = Path(args.filename[0]).rglob("*.txt")
+        args.filename = list(Path(args.filename[0]).rglob("*.txt"))
 
-    results = defaultdict(dict)
+    results = defaultdict(OrderedDict)
 
     # Read all files.
     fulltext = ""
@@ -149,7 +201,7 @@ def main():
     results['overall']['character'] = reduce(lambda x, y: x + y, results['single'].values())
 
     # Analyse the overall statistics with category statistics
-    categorize(results, category='unicode')
+    categorize(results, category='overall')
 
     # Analyse the overall statistics with customized categories
     for category in args.categorize:
@@ -159,10 +211,10 @@ def main():
     validate_guidelines(fulltext, results, args.guidelines)
 
     # Print the information
-    pprint(results['overall'], indent=4)
-    pprint(results['Fraktur'])
-    pprint(results['OCRD-1'])
-    print(ord('A'))
+    #pprint(results['overall'], indent=4)
+    #pprint(results['Fraktur'])
+    #pprint(results['OCRD-1'])
+    create_report(results,args.output)
 
 
 if __name__ == '__main__':

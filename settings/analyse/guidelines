@@ -1,0 +1,11 @@
+[OCRD-1]
+Unicode violation == LETTER LONG S
+                   LIGATURE
+                   LETTER AE
+                   LETTER DB
+                   LETTER QP
+                   COMBINING LATIN SMALL
+                   ANGLE QUOTATION
+                   ROTUNDA
+                   SLASH
+Regex violation == \s\.
