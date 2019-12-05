@@ -2,21 +2,22 @@
 
 import argparse
 import io
-from collections import defaultdict, Counter, OrderedDict
-from pathlib import Path
-from functools import reduce
-import unicodedata
 import json
 import re
 import sys
+import unicodedata
+from collections import defaultdict, Counter, OrderedDict
+from functools import reduce
+from pathlib import Path
 
 # Command line arguments.
 arg_parser = argparse.ArgumentParser(description='Analyze the ground truth texts for the given text files.')
 arg_parser.add_argument("filename", type=lambda x: Path(x), help="filename of text file or path to files", nargs='*')
-arg_parser.add_argument("-o","--output", type=lambda x: Path(x) if x is not None else None, default="./report.txt",help="filename of the output report, \
+arg_parser.add_argument("-o", "--output", type=lambda x: Path(x) if x is not None else None, default="./report.txt",
+                        help="filename of the output report, \
                         if none is given the result is printed to stdout")
 arg_parser.add_argument("-j", "--json", help="will also output the all results as json file",
-                        action="store_false")
+                        action="store_true")
 arg_parser.add_argument("-n", "--dry-run", help="show which files would be normalized but don't change them",
                         action="store_true")
 arg_parser.add_argument("-v", "--verbose", help="show ignored files", action="store_true")
@@ -28,7 +29,6 @@ arg_parser.add_argument("-g", "--guidelines", help="Evaluated the dataset agains
                         default="OCRD-1", choices=["OCRD-1", "OCRD-2", "OCRD-3"])
 arg_parser.add_argument("-t", "--textnormalization", help="Textnormalization settings", type=str, default="NFC",
                         choices=["NFC", "NFKC", "NFD", "NFKD"])
-
 
 args = arg_parser.parse_args()
 
@@ -107,14 +107,15 @@ def validate_guidelines(fulltext, results, guideline):
                     get_defaultdict(results[guideline], conditionkey)
                     results[guideline][conditionkey][condition] = len(count)
             delregex.append(conditionkey)
-        #tbd: replace with elegant implementation
+        # tbd: replace with elegant implementation
         for conditionkey in delregex:
             del guidelines[guideline][conditionkey]
         for glyphe, count in results['overall']['character'].items():
             for conditionkey, conditions in guidelines[guideline].items():
                 for condition in conditions:
                     if ord(glyphe) == condition or \
-                            isinstance(condition, str) and condition.upper() in unicodedata.name(glyphe).replace(' ', ''):
+                            isinstance(condition, str) and condition.upper() in unicodedata.name(glyphe).replace(' ',
+                                                                                                                 ''):
                         get_defaultdict(results, guideline)
                         get_defaultdict(results[guideline], conditionkey)
                         results[guideline][conditionkey][glyphe] = count
@@ -133,9 +134,9 @@ def report_subsection(fout, subsection, result, header="", subheaderinfo=""):
     for condition, conditionres in result[subsection].items():
         fout.write(f"""
         {condition}
-        {"-"*len(condition)}""")
+        {"-" * len(condition)}""")
         for key, val in conditionres.items():
-            if isinstance(val,dict):
+            if isinstance(val, dict):
                 fout.write(f"""
             {key}:""")
                 for keyy, vall in sorted(val.items()):
@@ -145,7 +146,7 @@ def report_subsection(fout, subsection, result, header="", subheaderinfo=""):
                 fout.write(f"""
             {key}: {val}""")
     fout.write(f"""
-    \n{"-"*60}\n""")
+    \n{"-" * 60}\n""")
     return
 
 
@@ -157,20 +158,20 @@ def summerize(results, category):
     if category == "character": return
     if category in results:
         get_defaultdict(results, "sum")
-        results["sum"]["sum"] = results["sum"].get('sum',0)
+        results["sum"]["sum"] = results["sum"].get('sum', 0)
         get_defaultdict(results["sum"], category)
         results["sum"][category]["sum"] = 0
         for sectionkey, sectionval in results[category].items():
             get_defaultdict(results["sum"][category], sectionkey)
             results["sum"][category][sectionkey]["sum"] = 0
             if isinstance(sectionval, dict):
-                    for subsectionkey, subsectionval in sorted(sectionval.items()):
-                        get_defaultdict(results["sum"][category][sectionkey], subsectionkey)
-                        intermediate_sum = sum(subsectionval.values())
-                        results["sum"][category][sectionkey][subsectionkey]["sum"] = intermediate_sum
-                        results["sum"][category][sectionkey]["sum"] += intermediate_sum
-                        results["sum"][category]["sum"] += intermediate_sum
-                        results["sum"]["sum"] += intermediate_sum
+                for subsectionkey, subsectionval in sorted(sectionval.items()):
+                    get_defaultdict(results["sum"][category][sectionkey], subsectionkey)
+                    intermediate_sum = sum(subsectionval.values())
+                    results["sum"][category][sectionkey][subsectionkey]["sum"] = intermediate_sum
+                    results["sum"][category][sectionkey]["sum"] += intermediate_sum
+                    results["sum"][category]["sum"] += intermediate_sum
+                    results["sum"]["sum"] += intermediate_sum
 
             else:
                 intermediate_sum = sum(sectionval.values())
@@ -183,32 +184,34 @@ def create_report(result, output):
     if not output:
         fout = sys.stdout
     else:
-        fout = open(output,'w')
+        fout = open(output, 'w')
     fout.write(f"""
     Analyse-Report Version 0.1
     Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
-    \n{"-"*60}\n""")
+    \n{"-" * 60}\n""")
     if args.guidelines in result.keys():
-        violations = sum_statistics(result,args.guidelines)
-        report_subsection(fout,args.guidelines,result, \
-                          header=f"{args.guidelines} Guidelines Evaluation", subheaderinfo=f"Guideline violations overall: {violations}")
+        violations = sum_statistics(result, args.guidelines)
+        report_subsection(fout, args.guidelines, result, \
+                          header=f"{args.guidelines} Guidelines Evaluation",
+                          subheaderinfo=f"Guideline violations overall: {violations}")
     for category in args.categorize:
         if category in result.keys():
             occurences = sum_statistics(result, category)
-            report_subsection(fout,category,result, \
-                              header=f"Category statistics: {category}", subheaderinfo=f"Overall occurrences: {occurences}")
+            report_subsection(fout, category, result, \
+                              header=f"Category statistics: {category}",
+                              subheaderinfo=f"Overall occurrences: {occurences}")
     if "overall" in result.keys():
         subheader = f"""
-    ASCII Letters: {result.get('overall',0).get('sum',0).get('L',0).get('LATIN',0).get('sum',0)}
-    ASCII Letters (lowercase): {result.get('overall',0).get('sum',0).get('L',0).get('LATIN',0).get('Ll',0).get('sum',0)}
-    ASCII Letters (uppercase): {result.get('overall',0).get('sum',0).get('L',0).get('LATIN',0).get('Lu',0).get('sum',0)}
-    Numbers: {result.get('overall',0).get('sum',0).get('N',0).get('DIGIT',0).get('Nd',0).get('sum',0)}
+    ASCII Letters: {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('sum', 0)}
+    ASCII Letters (lowercase): {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('Ll', 0).get('sum', 0)}
+    ASCII Letters (uppercase): {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('Lu', 0).get('sum', 0)}
+    Numbers: {result.get('overall', 0).get('sum', 0).get('N', 0).get('DIGIT', 0).get('Nd', 0).get('sum', 0)}
     """
         report_subsection(fout, "L", {}, header="Categorized statistics overall", subheaderinfo=subheader)
     if "overall" in result.keys():
         report_subsection(fout, "L", result["overall"], header="Overall Letter statistics")
     # TODO: Are single values to much information?
-    #if "single" in result.keys():
+    # if "single" in result.keys():
     #    pass
     #    create_subsection(fout,"single",result, header="Single statistics")
     fout.flush()
@@ -216,7 +219,7 @@ def create_report(result, output):
     return
 
 
-def create_json(results,output):
+def create_json(results, output):
     if output:
         jout = open(output.with_suffix(".json"), "w")
     else:
@@ -274,15 +277,12 @@ def main():
 
     # Summerize category data
     for key in set(results["overall"].keys()):
-        summerize(results["overall"],key)
+        summerize(results["overall"], key)
 
     # Print the information
-    #pprint(results['overall'], indent=4)
-    #pprint(results['Fraktur'])
-    #pprint(results['OCRD-1'])
     validate_output(args)
-    create_report(results,args.output)
-    if args.json: create_json(results,args.output)
+    create_report(results, args.output)
+    if args.json: create_json(results, args.output)
 
 
 if __name__ == '__main__':
