@@ -13,10 +13,10 @@ import sys
 # Command line arguments.
 arg_parser = argparse.ArgumentParser(description='Analyze the ground truth texts for the given text files.')
 arg_parser.add_argument("filename", type=lambda x: Path(x), help="filename of text file or path to files", nargs='*')
-arg_parser.add_argument("-o","--output", type=lambda x: Path(x) if x is not None else None, default=None,help="filename of the output report, \
+arg_parser.add_argument("-o","--output", type=lambda x: Path(x) if x is not None else None, default="./report.txt",help="filename of the output report, \
                         if none is given the result is printed to stdout")
 arg_parser.add_argument("-j", "--json", help="will also output the all results as json file",
-                        action="store_true")
+                        action="store_false")
 arg_parser.add_argument("-n", "--dry-run", help="show which files would be normalized but don't change them",
                         action="store_true")
 arg_parser.add_argument("-v", "--verbose", help="show ignored files", action="store_true")
@@ -51,6 +51,7 @@ def load_settings(filename):
             if setting:
                 if '==' in line:
                     subsetting, line = line.split("==")
+                    # Didn't use \s on purpose
                     line = re.sub(r' ', '', line)
                 if subsetting and isinstance(settings[setting][subsetting], list):
                     for values in line.split('||'):
@@ -123,8 +124,12 @@ def validate_guidelines(fulltext, results, guideline):
 def report_subsection(fout, subsection, result, header="", subheaderinfo=""):
     addline = '\n'
     fout.write(f"""
-{header}
-{subheaderinfo}{addline if subheaderinfo != "" else ""}""")
+    {header}
+    {subheaderinfo}{addline if subheaderinfo != "" else ""}""")
+    if not result:
+        fout.write(f"""
+            \n{"-" * 60}\n""")
+        return
     for condition, conditionres in result[subsection].items():
         fout.write(f"""
         {condition}
@@ -148,15 +153,41 @@ def sum_statistics(result, section):
     return sum([val for subsection in result[section].values() for val in subsection.values()])
 
 
+def summerize(results, category):
+    if category == "character": return
+    if category in results:
+        get_defaultdict(results, "sum")
+        results["sum"]["sum"] = results["sum"].get('sum',0)
+        get_defaultdict(results["sum"], category)
+        results["sum"][category]["sum"] = 0
+        for sectionkey, sectionval in results[category].items():
+            get_defaultdict(results["sum"][category], sectionkey)
+            results["sum"][category][sectionkey]["sum"] = 0
+            if isinstance(sectionval, dict):
+                    for subsectionkey, subsectionval in sorted(sectionval.items()):
+                        get_defaultdict(results["sum"][category][sectionkey], subsectionkey)
+                        intermediate_sum = sum(subsectionval.values())
+                        results["sum"][category][sectionkey][subsectionkey]["sum"] = intermediate_sum
+                        results["sum"][category][sectionkey]["sum"] += intermediate_sum
+                        results["sum"][category]["sum"] += intermediate_sum
+                        results["sum"]["sum"] += intermediate_sum
+
+            else:
+                intermediate_sum = sum(sectionval.values())
+                results["sum"][category][sectionkey]["sum"] = intermediate_sum
+                results["sum"][category]["sum"] += intermediate_sum
+                results["sum"]["sum"] += intermediate_sum
+
+
 def create_report(result, output):
     if not output:
         fout = sys.stdout
     else:
         fout = open(output,'w')
     fout.write(f"""
-Analyse-Report Version 0.1
-Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
-\n{"-"*60}\n""")
+    Analyse-Report Version 0.1
+    Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
+    \n{"-"*60}\n""")
     if args.guidelines in result.keys():
         violations = sum_statistics(result,args.guidelines)
         report_subsection(fout,args.guidelines,result, \
@@ -167,22 +198,30 @@ Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
             report_subsection(fout,category,result, \
                               header=f"Category statistics: {category}", subheaderinfo=f"Overall occurrences: {occurences}")
     if "overall" in result.keys():
+        subheader = f"""
+    ASCII Letters: {result.get('overall',0).get('sum',0).get('L',0).get('LATIN',0).get('sum',0)}
+    ASCII Letters (lowercase): {result.get('overall',0).get('sum',0).get('L',0).get('LATIN',0).get('Ll',0).get('sum',0)}
+    ASCII Letters (uppercase): {result.get('overall',0).get('sum',0).get('L',0).get('LATIN',0).get('Lu',0).get('sum',0)}
+    Numbers: {result.get('overall',0).get('sum',0).get('N',0).get('DIGIT',0).get('Nd',0).get('sum',0)}
+    """
+        report_subsection(fout, "L", {}, header="Categorized statistics overall", subheaderinfo=subheader)
+    if "overall" in result.keys():
         report_subsection(fout, "L", result["overall"], header="Overall Letter statistics")
-        #pass
-        #create_subsection(fout, "overall",result, header="Overall statistics")
-    if "single" in result.keys():
-        pass
-        #create_subsection(fout,"single",result, header="Single statistics")
+    # TODO: Are single values to much information?
+    #if "single" in result.keys():
+    #    pass
+    #    create_subsection(fout,"single",result, header="Single statistics")
     fout.flush()
     fout.close()
     return
 
+
 def create_json(results,output):
     if output:
-        jout = open(output.join(".json"), "w")
+        jout = open(output.with_suffix(".json"), "w")
     else:
         jout = sys.stdout
-    json.dump(jout, results, indent=4)
+    json.dump(results, jout, indent=4)
     jout.flush()
     jout.close()
     return
@@ -191,12 +230,13 @@ def create_json(results,output):
 def validate_output(args):
     output = args.output
     if not output: return
-    if not output.parent.exist():
+    if not output.parent.exists():
         output.parent.mkdir()
     if not output.is_file():
         output.join("result.txt")
     args.output = output
     return
+
 
 def main():
     # Set filenames or path
@@ -231,6 +271,10 @@ def main():
 
     # Validate the text versus the guidelines
     validate_guidelines(fulltext, results, args.guidelines)
+
+    # Summerize category data
+    for key in set(results["overall"].keys()):
+        summerize(results["overall"],key)
 
     # Print the information
     #pprint(results['overall'], indent=4)
