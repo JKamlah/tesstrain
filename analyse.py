@@ -6,6 +6,7 @@ from collections import defaultdict, Counter, OrderedDict
 from pathlib import Path
 from functools import reduce
 import unicodedata
+import json
 import re
 import sys
 
@@ -14,6 +15,8 @@ arg_parser = argparse.ArgumentParser(description='Analyze the ground truth texts
 arg_parser.add_argument("filename", type=lambda x: Path(x), help="filename of text file or path to files", nargs='*')
 arg_parser.add_argument("-o","--output", type=lambda x: Path(x) if x is not None else None, default=None,help="filename of the output report, \
                         if none is given the result is printed to stdout")
+arg_parser.add_argument("-j", "--json", help="will also output the all results as json file",
+                        action="store_true")
 arg_parser.add_argument("-n", "--dry-run", help="show which files would be normalized but don't change them",
                         action="store_true")
 arg_parser.add_argument("-v", "--verbose", help="show ignored files", action="store_true")
@@ -25,6 +28,7 @@ arg_parser.add_argument("-g", "--guidelines", help="Evaluated the dataset agains
                         default="OCRD-1", choices=["OCRD-1", "OCRD-2", "OCRD-3"])
 arg_parser.add_argument("-t", "--textnormalization", help="Textnormalization settings", type=str, default="NFC",
                         choices=["NFC", "NFKC", "NFD", "NFKD"])
+
 
 args = arg_parser.parse_args()
 
@@ -119,21 +123,22 @@ def validate_guidelines(fulltext, results, guideline):
 def report_subsection(fout, subsection, result, header="", subheaderinfo=""):
     addline = '\n'
     fout.write(f"""
-    {header}
-    {subheaderinfo}{addline if subheaderinfo != "" else ""}""")
+{header}
+{subheaderinfo}{addline if subheaderinfo != "" else ""}""")
     for condition, conditionres in result[subsection].items():
         fout.write(f"""
-        {condition}:""")
+        {condition}
+        {"-"*len(condition)}""")
         for key, val in conditionres.items():
             if isinstance(val,dict):
                 fout.write(f"""
-                {key}:""")
+            {key}:""")
                 for keyy, vall in sorted(val.items()):
                     fout.write(f"""
-                     {keyy}: {vall}""")
+                {keyy}: {vall}""")
             else:
                 fout.write(f"""
-                {key}: {val}""")
+            {key}: {val}""")
     fout.write(f"""
     \n{"-"*60}\n""")
     return
@@ -147,15 +152,11 @@ def create_report(result, output):
     if not output:
         fout = sys.stdout
     else:
-        if not output.parent.exist():
-            output.parent.mkdir()
-        if not output.is_file():
-            output.join("result.txt")
         fout = open(output,'w')
     fout.write(f"""
-    Analyse-Report Version 0.1
-    Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
-    \n{"-"*60}\n""")
+Analyse-Report Version 0.1
+Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
+\n{"-"*60}\n""")
     if args.guidelines in result.keys():
         violations = sum_statistics(result,args.guidelines)
         report_subsection(fout,args.guidelines,result, \
@@ -172,9 +173,30 @@ def create_report(result, output):
     if "single" in result.keys():
         pass
         #create_subsection(fout,"single",result, header="Single statistics")
+    fout.flush()
     fout.close()
     return
 
+def create_json(results,output):
+    if output:
+        jout = open(output.join(".json"), "w")
+    else:
+        jout = sys.stdout
+    json.dump(jout, results, indent=4)
+    jout.flush()
+    jout.close()
+    return
+
+
+def validate_output(args):
+    output = args.output
+    if not output: return
+    if not output.parent.exist():
+        output.parent.mkdir()
+    if not output.is_file():
+        output.join("result.txt")
+    args.output = output
+    return
 
 def main():
     # Set filenames or path
@@ -214,7 +236,9 @@ def main():
     #pprint(results['overall'], indent=4)
     #pprint(results['Fraktur'])
     #pprint(results['OCRD-1'])
+    validate_output(args)
     create_report(results,args.output)
+    if args.json: create_json(results,args.output)
 
 
 if __name__ == '__main__':

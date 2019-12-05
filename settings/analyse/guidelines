@@ -8,4 +8,7 @@ Unicode violation == LETTER LONG S
                    ANGLE QUOTATION
                    ROTUNDA
                    SLASH
+                   A
+                   B
+                   C
 Regex violation == \s\.
