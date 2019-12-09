@@ -7,28 +7,28 @@ import re
 import sys
 import unicodedata
 from collections import defaultdict, Counter, OrderedDict
-from functools import reduce
 from pathlib import Path
 
 # Command line arguments.
 arg_parser = argparse.ArgumentParser(description='Analyze the ground truth texts for the given text files.')
 arg_parser.add_argument("filename", type=lambda x: Path(x), help="filename of text file or path to files", nargs='*')
-arg_parser.add_argument("-o", "--output", type=lambda x: Path(x) if x is not None else None, default="./report.txt",
+arg_parser.add_argument("-o", "--output", type=lambda x: Path(x) if x is not None else None, default=None,
                         help="filename of the output report, \
                         if none is given the result is printed to stdout")
-arg_parser.add_argument("-j", "--json", help="will also output the all results as json file",
+arg_parser.add_argument("-j", "--json", help="will also output the all results as json file (including the guideline_violations)",
                         action="store_true")
 arg_parser.add_argument("-n", "--dry-run", help="show which files would be normalized but don't change them",
                         action="store_true")
-arg_parser.add_argument("-v", "--verbose", help="show ignored files", action="store_true")
 arg_parser.add_argument("-f", "--form", help="normalization form (default: NFC)",
                         choices=["NFC", "NFKC", "NFD", "NFKD"], default="NFC")
-arg_parser.add_argument("-c", "--categorize", help="Customized unicodedata categories", type=str, default=["Fraktur"],
+arg_parser.add_argument("-c", "--categorize", help="Customized unicodedata categories", type=str, default=["Good Practice"],
                         nargs='*')
 arg_parser.add_argument("-g", "--guidelines", help="Evaluated the dataset against some guidelines", type=str,
                         default="OCRD-1", choices=["OCRD-1", "OCRD-2", "OCRD-3"])
 arg_parser.add_argument("-t", "--textnormalization", help="Textnormalization settings", type=str, default="NFC",
                         choices=["NFC", "NFKC", "NFD", "NFKD"])
+arg_parser.add_argument("-v", "--verbose", help="show ignored files", action="store_true")
+
 
 args = arg_parser.parse_args()
 
@@ -51,8 +51,7 @@ def load_settings(filename):
             if setting:
                 if '==' in line:
                     subsetting, line = line.split("==")
-                    # Didn't use \s on purpose
-                    line = re.sub(r' ', '', line)
+                    line = line.strip()
                 if subsetting and isinstance(settings[setting][subsetting], list):
                     for values in line.split('||'):
                         if '-' in values and len(values.split('-')) == 2:
@@ -94,31 +93,31 @@ def categorize(results: defaultdict, category='overall'):
     return
 
 
-def validate_guidelines(fulltext, results, guideline):
+def validate_guidelines(results, args):
+    guideline = args.guidelines
     guidelines = load_settings("settings/analyse/guidelines")
-    delregex = []
     if guidelines and guideline in guidelines.keys():
-        for conditionkey, conditions in guidelines[guideline].items():
-            if "REGEX" not in conditionkey.upper(): continue
-            for condition in conditions:
-                count = re.findall(rf"{condition}", fulltext)
-                if count:
-                    get_defaultdict(results, guideline)
-                    get_defaultdict(results[guideline], conditionkey)
-                    results[guideline][conditionkey][condition] = len(count)
-            delregex.append(conditionkey)
-        # tbd: replace with elegant implementation
-        for conditionkey in delregex:
-            del guidelines[guideline][conditionkey]
-        for glyphe, count in results['overall']['character'].items():
+        for file, fileinfo in results['single'].items():
+            text = fileinfo['text']
             for conditionkey, conditions in guidelines[guideline].items():
                 for condition in conditions:
-                    if ord(glyphe) == condition or \
-                            isinstance(condition, str) and condition.upper() in unicodedata.name(glyphe).replace(' ',
-                                                                                                                 ''):
-                        get_defaultdict(results, guideline)
-                        get_defaultdict(results[guideline], conditionkey)
-                        results[guideline][conditionkey][glyphe] = count
+                    if "REGEX" in conditionkey.upper():
+                        count = re.findall(rf"{condition}", text)
+                        if count:
+                            get_defaultdict(results, guideline)
+                            get_defaultdict(results[guideline], conditionkey, instance = int)
+                            results[guideline][conditionkey][condition] += len(count)
+                            if args.json:
+                                get_defaultdict(results['single'][file],'guideline_violation',instance = int)
+                                results['single'][file]['guideline_violation'][condition] += len(count)
+                    else:
+                        for glyphe in text:
+                            if ord(glyphe) == condition or \
+                                isinstance(condition, str) and \
+                                    condition.upper() in unicodedata.name(glyphe):
+                                get_defaultdict(results, guideline)
+                                get_defaultdict(results[guideline], conditionkey, instance = int)
+                                results[guideline][conditionkey][condition] += 1
     return
 
 
@@ -128,8 +127,7 @@ def report_subsection(fout, subsection, result, header="", subheaderinfo=""):
     {header}
     {subheaderinfo}{addline if subheaderinfo != "" else ""}""")
     if not result:
-        fout.write(f"""
-            \n{"-" * 60}\n""")
+        fout.write(f"""{"-" * 60}\n""")
         return
     for condition, conditionres in result[subsection].items():
         fout.write(f"""
@@ -139,12 +137,12 @@ def report_subsection(fout, subsection, result, header="", subheaderinfo=""):
             if isinstance(val, dict):
                 fout.write(f"""
             {key}:""")
-                for keyy, vall in sorted(val.items()):
+                for subkey, subval in sorted(val.items()):
                     fout.write(f"""
-                {keyy}: {vall}""")
+                {subval:-{6}}: [{subkey}]""")
             else:
                 fout.write(f"""
-            {key}: {val}""")
+            {val:-{6}}: [{key}]""")
     fout.write(f"""
     \n{"-" * 60}\n""")
     return
@@ -181,6 +179,7 @@ def summerize(results, category):
 
 
 def create_report(result, output):
+    fpoint = 6
     if not output:
         fout = sys.stdout
     else:
@@ -189,6 +188,17 @@ def create_report(result, output):
     Analyse-Report Version 0.1
     Input: {";".join(set([str(fname.resolve().parent) for fname in args.filename]))}
     \n{"-" * 60}\n""")
+    if "overall" in result.keys():
+        subheader = f"""
+        {result.get('overall', 0).get('sum', 0).get('Z', 0).get('SPACE', 0).get('Zs', 0).get('sum', 0):-{fpoint}} : ASCII Spacing Symbols
+        {result.get('overall', 0).get('sum', 0).get('N', 0).get('DIGIT', 0).get('Nd', 0).get('sum', 0):-{fpoint}} : ASCII Digits
+        {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('sum', 0):-{fpoint}} : ASCII Letters
+        {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('Ll', 0).get('sum', 0):-{fpoint}} : ASCII Lowercase Letters
+        {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('Lu', 0).get('sum', 0):-{fpoint}} : ASCII Uppercase Letters
+        {result.get('overall', 0).get('sum', 0).get('P', 0).get('sum', 0):-{fpoint}} : Punctuation & Symbols
+        {result.get('overall', 0).get('sum', 0).get('sum', 0):-{fpoint}} : Total Glyphes
+    """
+        report_subsection(fout, "L", {}, header="Statistics overall", subheaderinfo=subheader)
     if args.guidelines in result.keys():
         violations = sum_statistics(result, args.guidelines)
         report_subsection(fout, args.guidelines, result, \
@@ -201,30 +211,19 @@ def create_report(result, output):
                               header=f"Category statistics: {category}",
                               subheaderinfo=f"Overall occurrences: {occurences}")
     if "overall" in result.keys():
-        subheader = f"""
-    ASCII Letters: {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('sum', 0)}
-    ASCII Letters (lowercase): {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('Ll', 0).get('sum', 0)}
-    ASCII Letters (uppercase): {result.get('overall', 0).get('sum', 0).get('L', 0).get('LATIN', 0).get('Lu', 0).get('sum', 0)}
-    Numbers: {result.get('overall', 0).get('sum', 0).get('N', 0).get('DIGIT', 0).get('Nd', 0).get('sum', 0)}
-    """
-        report_subsection(fout, "L", {}, header="Categorized statistics overall", subheaderinfo=subheader)
-    if "overall" in result.keys():
         report_subsection(fout, "L", result["overall"], header="Overall Letter statistics")
-    # TODO: Are single values to much information?
-    # if "single" in result.keys():
-    #    pass
-    #    create_subsection(fout,"single",result, header="Single statistics")
     fout.flush()
-    fout.close()
+    if fout != sys.stdout:
+        fout.close()
     return
 
 
 def create_json(results, output):
     if output:
-        jout = open(output.with_suffix(".json"), "w")
+        jout = open(output.with_suffix(".json"), "w", encoding='utf-8')
     else:
         jout = sys.stdout
-    json.dump(results, jout, indent=4)
+    json.dump(results, jout, indent=4, ensure_ascii=False).encode('utf8')
     jout.flush()
     jout.close()
     return
@@ -249,13 +248,12 @@ def main():
     results = defaultdict(OrderedDict)
 
     # Read all files.
-    fulltext = ""
     for filename in args.filename:
         with io.open(filename, 'r', encoding='utf-8') as fin:
             try:
                 text = unicodedata.normalize(args.textnormalization, fin.read().strip())
-                fulltext += text
-                results['single'][filename.name] = Counter(text)
+                get_defaultdict(results['single'], filename.name)
+                results['single'][filename.name]['text'] = text
             except UnicodeDecodeError:
                 if args.verbose:
                     print(filename.name + " (ignored)")
@@ -263,7 +261,7 @@ def main():
 
     # Analyse the overall statistics
     get_defaultdict(results, 'overall')
-    results['overall']['character'] = reduce(lambda x, y: x + y, results['single'].values())
+    results['overall']['character'] = Counter("".join([text for fileinfo in results['single'].values() for text in fileinfo.values()]))
 
     # Analyse the overall statistics with category statistics
     categorize(results, category='overall')
@@ -273,7 +271,7 @@ def main():
         categorize(results, category=category)
 
     # Validate the text versus the guidelines
-    validate_guidelines(fulltext, results, args.guidelines)
+    validate_guidelines(results, args)
 
     # Summerize category data
     for key in set(results["overall"].keys()):
@@ -283,7 +281,6 @@ def main():
     validate_output(args)
     create_report(results, args.output)
     if args.json: create_json(results, args.output)
-
 
 if __name__ == '__main__':
     main()
